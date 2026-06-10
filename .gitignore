@@ -10,6 +10,7 @@ __pycache__/
 *.egg-info/
 dist/
 build/
+output/
 
 # Legacy monolith scripts (replaced by qnr_data_processing/ package)
 generate_output.py

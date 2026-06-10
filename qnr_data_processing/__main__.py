@@ -1,7 +1,7 @@
-#!/usr/bin/env python3
-"""CLI 入口: python -m qnr_data_processing"""
+"""CLI entry point."""
 
-from .orchestrator import run_pipeline
+from .cli import main
 
-if __name__ == '__main__':
-    run_pipeline()
+
+if __name__ == "__main__":
+    raise SystemExit(main())
