@@ -58,7 +58,21 @@ JSON task specification; never pass ambiguous natural language directly to data 
    python -m qnr_data_processing run --config task.json
    ```
 
-11. Check the generated audit JSON and Excel sheets. Report input N, cleaned N, each cleaning
+11. Generate the presentation-ready report from the tables output:
+
+    ```bash
+    python -m qnr_data_processing report \
+      --tables output/questionnaire_tables.xlsx \
+      --config task.json \
+      --output output/数据分析表_美化版.xlsx
+    ```
+
+    This lays out one block per question: a full-width question banner (tagged
+    "（多选）"/"（开放题）"), a "Base" row with each group's denominator, then one row
+    per option with each group reported as count and column %. T2B/B2B summary rows
+    are highlighted. Customize the title with `--title`.
+
+12. Check the generated audit JSON and Excel sheets. Report input N, cleaned N, each cleaning
    rule's removed N, quality findings, group bases, weight efficiency, output paths, privacy
    suppression, and any limitations to the user.
 
@@ -94,3 +108,5 @@ JSON task specification; never pass ambiguous natural language directly to data 
 - `references/task-spec.md`: complete task JSON fields and example.
 - `references/rules.md`: supported logical and comparison operators.
 - `scripts/create_task_template.py`: generate a starter JSON from an inventory.
+- `python -m qnr_data_processing report`: build a presentation-ready report workbook
+  (one block per question: question banner + Base row + per-option count/column %).

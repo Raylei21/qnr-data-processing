@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from pathlib import Path
 
 from .dataset import load_dataset
 from .discovery import discover_task
@@ -40,6 +41,14 @@ def build_parser() -> argparse.ArgumentParser:
     run_parser.add_argument(
         "--validate-only", action="store_true", help="只校验配置和输入，不写输出"
     )
+
+    report_parser = subparsers.add_parser(
+        "report", help="生成美化版数据分析表（一题一块：题干+Base行+选项）"
+    )
+    report_parser.add_argument("--tables", required=True, help="引擎输出的 Excel（含 tables_wide）")
+    report_parser.add_argument("--config", default=None, help="任务配置 task.json（用于标注多选/开放题）")
+    report_parser.add_argument("--output", default=None, help="输出路径（默认与 tables 同目录）")
+    report_parser.add_argument("--title", default="数据分析表", help="报表标题")
     return parser
 
 
@@ -80,6 +89,21 @@ def main(argv: list[str] | None = None) -> int:
                     ensure_ascii=False,
                 )
             )
+            return 0
+
+        if args.command == "report":
+            from .pretty_report import build_report
+
+            tables = Path(args.tables)
+            output = (
+                Path(args.output)
+                if args.output
+                else tables.parent / "数据分析表_美化版.xlsx"
+            )
+            path = build_report(
+                tables, output, config_path=args.config, title=args.title
+            )
+            print(json.dumps({"status": "ok", "report": str(path)}, ensure_ascii=False))
             return 0
 
         spec = load_spec(args.config)

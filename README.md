@@ -436,6 +436,27 @@ python -m qnr_data_processing run --config task.json
 }
 ```
 
+## 美化版报表
+
+出表后可额外生成一份排版好的「一题一块」报表，方便直接汇报：
+
+```bash
+python -m qnr_data_processing report \
+  --tables output/questionnaire_tables.xlsx \
+  --config task.json \
+  --output output/数据分析表_美化版.xlsx \
+  --title "数据分析表"
+```
+
+排版规则：
+
+- 每道题一块：题干做通栏标题（多选题标「（多选）」、开放题标「（开放题）」）
+- 题干下方插入一行 `Base`，列出各分组在这道题的样本量（分母）
+- 每个分组两列：`频数` 与 `频率%`
+- `T2B` / `B2B` 等合并行自动高亮
+
+分组列由 `tables_wide` 动态识别，无需写死。
+
 ## Agent Skill
 
 根目录的 [SKILL.md](SKILL.md) 定义 Agent 的操作流程。源码安装后可以直接使用 Python
