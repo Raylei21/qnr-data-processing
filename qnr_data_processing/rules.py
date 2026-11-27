@@ -9,6 +9,13 @@ import pandas as pd
 
 from .dataset import SurveyDataset
 from .errors import RuleError
+from .multiselect import (
+    answered as multi_answered,
+    membership as multi_membership,
+    question_delimiter,
+    resolve_skip_values,
+    tokenize,
+)
 
 
 LOGICAL_KEYS = {"all", "any", "not"}
@@ -59,6 +66,15 @@ class RuleEvaluator:
 
     def _evaluate_condition(self, condition: dict[str, Any]) -> pd.Series:
         op = condition.get("op")
+        if op in {"selected", "not_selected"} and "question" in condition and "option" in condition:
+            question = self.questions.get(str(condition["question"]))
+            if question is not None and question_delimiter(question):
+                mask = self._delimiter_option_membership(question, condition)
+                if op == "not_selected":
+                    mask = ~mask
+                    if condition.get("missing_policy", "exclude") == "exclude":
+                        mask = mask & self._delimiter_question_answered(question)
+                return mask.fillna(False)
         if op not in OPERATORS:
             raise RuleError(f"不支持的操作符: {op}")
         series_list = self._resolve_series(condition)
@@ -127,6 +143,67 @@ class RuleEvaluator:
         if not resolved:
             raise RuleError(f"题目 {question_id} 没有配置 {source} 列")
         return resolved
+
+    def _delimiter_option_membership(
+        self, question: dict[str, Any], condition: dict[str, Any]
+    ) -> pd.Series:
+        source = condition.get("source", "text")
+        frame = self.dataset.frame(source)
+        delimiter = question_delimiter(question)
+        texts = self._delimiter_option_texts(question, condition["option"])
+        masks: list[pd.Series] = []
+        for column in question["columns"]:
+            name = column.get(source)
+            if not name:
+                continue
+            tokens = tokenize(frame[name], delimiter)
+            mask = pd.Series(False, index=frame.index)
+            for text in texts:
+                mask = mask | multi_membership(tokens, text)
+            masks.append(mask)
+        if not masks:
+            raise RuleError(f"题目 {question['id']} 没有配置 {source} 列")
+        return pd.concat(masks, axis=1).any(axis=1)
+
+    def _delimiter_question_answered(
+        self, question: dict[str, Any]
+    ) -> pd.Series:
+        delimiter = question_delimiter(question)
+        masks: list[pd.Series] = []
+        for column in question["columns"]:
+            source = "text" if column.get("text") else "numeric"
+            name = column.get(source)
+            if not name:
+                continue
+            tokens = tokenize(self.dataset.frame(source)[name], delimiter)
+            masks.append(
+                multi_answered(tokens, resolve_skip_values(column, question))
+            )
+        if not masks:
+            return pd.Series(False, index=self.dataset.text.index)
+        return pd.concat(masks, axis=1).any(axis=1)
+
+    @staticmethod
+    def _delimiter_option_texts(
+        question: dict[str, Any], option_text: Any
+    ) -> set[str]:
+        target = str(option_text).strip()
+        texts = {target}
+        options = question.get("options")
+        for column in question.get("columns", []):
+            if column.get("options"):
+                options = column["options"]
+                break
+        for item in options or []:
+            if isinstance(item, dict):
+                keys = {
+                    str(item.get("value", "")).strip(),
+                    str(item.get("label", "")).strip(),
+                    str(item.get("code", "")).strip(),
+                }
+                if target in keys:
+                    texts.add(str(item.get("value", "")).strip())
+        return {text for text in texts if text}
 
     def _apply_operator(
         self, series: pd.Series, op: str, condition: dict[str, Any]

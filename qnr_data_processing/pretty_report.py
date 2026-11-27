@@ -43,8 +43,9 @@ SUMMARY_OPTIONS = {"T2B", "B2B"}  # net rows to highlight
 TYPE_TAGS = {"multi": "（多选）", "open": "（开放题）"}
 
 
-def _groups_from_columns(columns: list[Any]) -> list[str]:
-    return [str(c)[: -len("_count")] for c in columns if str(c).endswith("_count")]
+def _groups_from_columns(columns: list[Any], weighted: bool = False) -> list[str]:
+    suffix = "_weighted_count" if weighted else "_count"
+    return [str(c)[: -len(suffix)] for c in columns if str(c).endswith(suffix)]
 
 
 def _text(value: Any) -> str:
@@ -75,24 +76,32 @@ def build_report(
     output_path: str | Path,
     config_path: str | Path | None = None,
     title: str = "数据分析表",
+    weighted: bool = False,
 ) -> Path:
     """Build the beautified report from an engine output workbook.
 
     Args:
-        tables_path: engine output Excel containing a ``tables_wide`` sheet.
+        tables_path: engine output Excel containing a ``tables_wide`` sheet
+            (or ``tables_weighted`` when ``weighted`` is True).
         output_path: destination ``.xlsx`` path.
         config_path: optional ``task.json``; used to tag multi/open questions.
         title: report title shown in the first row.
+        weighted: read weighted counts from ``tables_weighted`` instead of
+            unweighted counts from ``tables_wide``.
     """
-    wide = pd.read_excel(Path(tables_path), sheet_name="tables_wide")
-    groups = _groups_from_columns(list(wide.columns))
+    sheet = "tables_weighted" if weighted else "tables_wide"
+    wide = pd.read_excel(Path(tables_path), sheet_name=sheet)
+    groups = _groups_from_columns(list(wide.columns), weighted=weighted)
     if not groups:
-        raise ValueError("tables_wide 里没有找到 *_count 分组列")
+        suffix = "_weighted_count" if weighted else "_count"
+        raise ValueError(f"{sheet} 里没有找到 *{suffix} 分组列")
 
     qtype: dict[str, str] = {}
     if config_path:
         spec = json.loads(Path(config_path).read_text(encoding="utf-8"))
         qtype = {str(q["id"]): q["type"] for q in spec.get("questions", [])}
+
+    sfx = "_weighted" if weighted else ""
 
     n_cols = 2 + len(groups) * 2
     wb = Workbook()
@@ -141,7 +150,7 @@ def build_report(
             ws.cell(row=r, column=2).border = BORDER
             col = 3
             for group in groups:
-                base_val = row.get(f"{group}_base")
+                base_val = row.get(f"{group}{sfx}_base")
                 ws.merge_cells(start_row=r, start_column=col, end_row=r, end_column=col + 1)
                 _cell(
                     ws, r, col,
@@ -158,8 +167,8 @@ def build_report(
         _cell(ws, r, 2, opt, F_OPT_BOLD if is_net else F_OPT, None, LEFT)
         col = 3
         for group in groups:
-            cnt = row.get(f"{group}_count")
-            pct = row.get(f"{group}_percent")
+            cnt = row.get(f"{group}{sfx}_count")
+            pct = row.get(f"{group}{sfx}_percent")
             _cell(
                 ws, r, col,
                 None if pd.isna(cnt) else int(cnt),

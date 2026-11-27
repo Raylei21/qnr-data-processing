@@ -137,6 +137,107 @@ The engine accepts UTF-8 JSON. Paths are resolved relative to the task file.
   - `values`: values combined within each current single/matrix column.
   - `rule`: a structured rule for cross-column or custom summaries.
 
+### Delimiter-joined multiple choice
+
+When a multiple-choice question is exported as one column whose selected options are joined by a
+delimiter, declare `delimiter` on the column instead of a one-hot column per option:
+
+```json
+{
+  "id": "Q2",
+  "type": "multi",
+  "text": "吸引原因",
+  "base": "any_selected",
+  "columns": [
+    {
+      "text": "q02",
+      "delimiter": "┋",
+      "options": [
+        {"value": "价格实惠", "label": "价格实惠"},
+        {"value": "others, please specify", "label": "其他"}
+      ],
+      "skip_values": ["(跳过)"]
+    }
+  ]
+}
+```
+
+`options` entries may be strings or `{"value", "label", "exclusive"}` objects; when omitted, the
+engine derives them from observed tokens. `skip_values` defaults to `["(跳过)"]`; a cell containing
+only skip values is treated as skipped (not answered, not selected). Inline verbatims written as
+`option〖原文〗` are counted as that option and, when `privacy.include_open_responses` is true, are
+exported to `open_responses`.
+
+## Cleaning
+
+Cleaning entries support three forms. The default is a named delete rule:
+
+```json
+{"name": "剔除未成年人", "rule": {"column": "年龄", "op": "lt", "value": 18}}
+```
+
+`dedup` keeps one row per key by an extreme value of a numeric `on` column:
+
+```json
+{"name": "去重", "type": "dedup", "key": "customer_id", "keep": "max", "on": "duration_seconds"}
+```
+
+`normalize` rewrites a column in place without deleting rows:
+
+```json
+{"name": "去句号", "type": "normalize", "column": "Q9", "source": "text", "op": "rstrip", "value": "."}
+```
+
+Normalize `op` values: `strip`, `lstrip`, `rstrip`, `lower`, `replace` (`replace` also needs
+`replacement`).
+
+## Segments
+
+Segments assign respondents to mutually exclusive categories and generate both a derived column
+and one group column per branch:
+
+```json
+{
+  "segments": [
+    {
+      "name": "购买力分层",
+      "column": "purchase_power",
+      "mutually_exclusive": true,
+      "residual": "L3",
+      "branches": [
+        {"value": "L1", "label": "高购买力", "rule": {"column": "income", "op": "gte", "value": 6}},
+        {"value": "L2", "label": "中等购买力", "rule": {"column": "income", "op": "between", "value": [2, 5]}}
+      ]
+    }
+  ]
+}
+```
+
+Branches are evaluated in order and the first match wins. `mutually_exclusive` (default `true`)
+raises an error if any respondent matches more than one branch. `residual` assigns unmatched
+respondents to a value (`"L3"`) or excludes them (`"Exclude"`, the default). The derived column is
+named `column` (default `name`) and can be referenced by regular `column` rules.
+
+## Piping
+
+Declare skip logic to have the engine flag both directions of a violation:
+
+```json
+{
+  "piping": [
+    {
+      "name": "Q6 仅对 Q5 选失望者显示",
+      "gate": {"question": "Q5", "option": "失望", "op": "selected"},
+      "target": "Q6",
+      "skip_values": ["(跳过)"]
+    }
+  ]
+}
+```
+
+The check flags "应跳过却作答" (answered outside the gate) and "应作答却跳过" (empty or skipped
+inside the gate). Findings appear in `quality_checks` and never auto-delete.
+
 ## Output
 
 `tables_long` contains:
@@ -176,7 +277,10 @@ Generated-weight options:
 - `output_column`: generated column name in the cleaned workbook; default `final_weight`.
 
 The workbook adds `tables_weighted`, `weight_diagnostics`, and, for generated weights,
-`weight_targets`.
+`weight_targets`. `tables_wide` columns are named `{group}_count` / `{group}_base` /
+`{group}_percent`; `tables_weighted` columns are named `{group}_weighted_count` /
+`{group}_weighted_base` / `{group}_weighted_percent`. The `report --weighted` flag builds the
+beautified report from the weighted sheet.
 
 ## Research Audit Fields
 
@@ -190,7 +294,8 @@ The workbook adds `tables_weighted`, `weight_diagnostics`, and, for generated we
 - `privacy.include_open_responses`: default `false`; respondent-level verbatims require explicit
   opt-in because the text itself may contain personal information.
 - `privacy.min_cell_size`: suppresses published counts and percentages below the threshold while
-  retaining full internal audit calculations.
+  retaining full internal audit calculations. Default `0` (no suppression). It affects only the
+  published table sheets, never the audit JSON or audit sheets.
 
 The workbook includes quality findings, table-consistency checks, group-overlap diagnostics, and
 weight diagnostics. Weight diagnostics report coefficient of variation, effective sample size,

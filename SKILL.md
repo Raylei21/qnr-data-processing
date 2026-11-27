@@ -36,6 +36,10 @@ JSON task specification; never pass ambiguous natural language directly to data 
    Explicitly map every included question to real columns. Never infer by column position.
 6. Translate requirements into the structured rule tree described in
    [references/rules.md](references/rules.md). Preserve parentheses and AND/OR/NOT semantics.
+   Use the higher-level constructs where they fit: `cleaning` entries of type `dedup` / `normalize`
+   for deduplication and in-place column cleanup, a column `delimiter` for delimiter-joined
+   multiple-choice, `segments` for mutually exclusive respondent tiers, and `piping` for skip-logic
+   consistency checks. All are documented in [references/task-spec.md](references/task-spec.md).
 7. Validate without writing output:
 
    ```bash
@@ -70,7 +74,8 @@ JSON task specification; never pass ambiguous natural language directly to data 
     This lays out one block per question: a full-width question banner (tagged
     "（多选）"/"（开放题）"), a "Base" row with each group's denominator, then one row
     per option with each group reported as count and column %. T2B/B2B summary rows
-    are highlighted. Customize the title with `--title`.
+    are highlighted. Customize the title with `--title`; add `--weighted` to build the
+    report from the `tables_weighted` sheet instead of `tables_wide`.
 
 12. Check the generated audit JSON and Excel sheets. Report input N, cleaned N, each cleaning
    rule's removed N, quality findings, group bases, weight efficiency, output paths, privacy

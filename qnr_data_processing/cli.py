@@ -49,6 +49,11 @@ def build_parser() -> argparse.ArgumentParser:
     report_parser.add_argument("--config", default=None, help="任务配置 task.json（用于标注多选/开放题）")
     report_parser.add_argument("--output", default=None, help="输出路径（默认与 tables 同目录）")
     report_parser.add_argument("--title", default="数据分析表", help="报表标题")
+    report_parser.add_argument(
+        "--weighted",
+        action="store_true",
+        help="读取 tables_weighted 生成加权版报表",
+    )
     return parser
 
 
@@ -101,7 +106,11 @@ def main(argv: list[str] | None = None) -> int:
                 else tables.parent / "数据分析表_美化版.xlsx"
             )
             path = build_report(
-                tables, output, config_path=args.config, title=args.title
+                tables,
+                output,
+                config_path=args.config,
+                title=args.title,
+                weighted=args.weighted,
             )
             print(json.dumps({"status": "ok", "report": str(path)}, ensure_ascii=False))
             return 0

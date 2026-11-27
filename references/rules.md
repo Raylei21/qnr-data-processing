@@ -57,6 +57,10 @@ Examples:
 {"question": "Q5", "option": "其他", "op": "selected", "selected_values": [1]}
 ```
 
+For a multiple-choice question encoded as a single delimiter-joined column (see `delimiter` in the
+task specification), `question` + `option` + `selected` matches the split tokens instead of one-hot
+columns. `option` may name the option's `value` or `label`.
+
 Do not translate a rule if its field, coding, or precedence is uncertain. Ask for clarification.
 
 ## Quality Check Patterns

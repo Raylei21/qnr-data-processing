@@ -69,9 +69,11 @@ def validate_spec(spec: dict[str, Any]) -> None:
                     f"题目 {qid} 的每个 columns 项至少需要 text 或 numeric 列名"
                 )
 
-    _validate_named_rules(spec.get("cleaning", []), "cleaning")
+    _validate_cleaning(spec.get("cleaning", []))
     _validate_named_rules(spec.get("groups", []), "groups")
     _validate_named_rules(spec.get("quality_checks", []), "quality_checks")
+    _validate_segments(spec.get("segments"))
+    _validate_piping(spec.get("piping"))
     _validate_weight(spec.get("weight"))
 
     privacy = spec.get("privacy", {})
@@ -93,6 +95,83 @@ def _validate_named_rules(items: Any, field: str) -> None:
             raise ConfigError(f"{field}[{position}] 必须包含 name")
         if not isinstance(item.get("rule"), dict):
             raise ConfigError(f"{field}[{position}].rule 必须是对象")
+
+
+def _validate_cleaning(items: Any) -> None:
+    if not isinstance(items, list):
+        raise ConfigError("cleaning 必须是数组")
+    for position, item in enumerate(items, 1):
+        if not isinstance(item, dict) or not item.get("name"):
+            raise ConfigError(f"cleaning[{position}] 必须包含 name")
+        ctype = item.get("type", "rule")
+        if ctype == "rule":
+            if not isinstance(item.get("rule"), dict):
+                raise ConfigError(f"cleaning[{position}].rule 必须是对象")
+        elif ctype == "dedup":
+            if not item.get("key"):
+                raise ConfigError(f"cleaning[{position}] 的 dedup 必须包含 key")
+            if item.get("keep") not in (None, "max", "min"):
+                raise ConfigError(f"cleaning[{position}] 的 keep 只能是 max 或 min")
+            if not item.get("on"):
+                raise ConfigError(f"cleaning[{position}] 的 dedup 必须包含 on")
+        elif ctype == "normalize":
+            if not item.get("column"):
+                raise ConfigError(f"cleaning[{position}] 的 normalize 必须包含 column")
+            if item.get("op") not in {"strip", "lstrip", "rstrip", "lower", "replace"}:
+                raise ConfigError(
+                    f"cleaning[{position}] 的 normalize op 无效: {item.get('op')}"
+                )
+        else:
+            raise ConfigError(f"cleaning[{position}] 的 type 无效: {ctype}")
+
+
+def _validate_segments(segments: Any) -> None:
+    if segments is None:
+        return
+    if not isinstance(segments, list):
+        raise ConfigError("segments 必须是数组")
+    seen_columns: set[str] = set()
+    for position, segment in enumerate(segments, 1):
+        if not isinstance(segment, dict) or not segment.get("name"):
+            raise ConfigError(f"segments[{position}] 必须包含 name")
+        branches = segment.get("branches")
+        if not isinstance(branches, list) or not branches:
+            raise ConfigError(f"segments[{position}] 必须包含非空 branches 数组")
+        values: set[str] = set()
+        for bpos, branch in enumerate(branches, 1):
+            if not isinstance(branch, dict) or "value" not in branch:
+                raise ConfigError(f"segments[{position}].branches[{bpos}] 必须包含 value")
+            if not isinstance(branch.get("rule"), dict):
+                raise ConfigError(
+                    f"segments[{position}].branches[{bpos}].rule 必须是对象"
+                )
+            value = str(branch["value"])
+            if value in values:
+                raise ConfigError(
+                    f"segments[{position}] 的分支 value 重复: {value}"
+                )
+            values.add(value)
+        residual = segment.get("residual", "Exclude")
+        if residual is not None and not isinstance(residual, str):
+            raise ConfigError(f"segments[{position}] 的 residual 必须是字符串或 Exclude")
+        column_name = str(segment.get("column", segment["name"]))
+        if column_name in seen_columns:
+            raise ConfigError(f"segments 派生列名重复: {column_name}")
+        seen_columns.add(column_name)
+
+
+def _validate_piping(piping: Any) -> None:
+    if piping is None:
+        return
+    if not isinstance(piping, list):
+        raise ConfigError("piping 必须是数组")
+    for position, check in enumerate(piping, 1):
+        if not isinstance(check, dict):
+            raise ConfigError(f"piping[{position}] 必须是对象")
+        if not isinstance(check.get("gate"), dict):
+            raise ConfigError(f"piping[{position}].gate 必须是规则对象")
+        if not check.get("target"):
+            raise ConfigError(f"piping[{position}] 必须包含 target（跳转目标题目 id）")
 
 
 def _validate_weight(weight: Any) -> None:

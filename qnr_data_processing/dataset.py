@@ -34,6 +34,20 @@ class SurveyDataset:
             return self.numeric
         raise DataValidationError(f"未知数据源: {source}")
 
+    def with_columns(self, mapping: dict[str, pd.Series]) -> "SurveyDataset":
+        numeric = self.numeric.copy()
+        text = self.text.copy()
+        for name, series in mapping.items():
+            aligned = series.reindex(self.text.index)
+            numeric[name] = aligned
+            text[name] = aligned
+        return SurveyDataset(
+            numeric=numeric,
+            text=text,
+            respondent_ids=self.text.index,
+            warnings=list(self.warnings),
+        )
+
 
 def load_dataset(inputs: dict[str, Any], config_dir: str | Path = ".") -> SurveyDataset:
     config_dir = Path(config_dir)

@@ -9,6 +9,7 @@ from typing import Any
 import pandas as pd
 from openpyxl.styles import Alignment, Font, PatternFill
 
+from .multiselect import open_verbatims, question_delimiter
 from .processor import ProcessingResult
 
 
@@ -100,8 +101,10 @@ def _audit_frames(audit: dict[str, Any]) -> tuple[pd.DataFrame, pd.DataFrame]:
     cleaning_rows = [
         {
             "rule": item["name"],
+            "type": item.get("type", "rule"),
             "before": item["before"],
             "removed": item["removed"],
+            "changed": item.get("changed", 0),
             "after": item["after"],
             "removed_ids": ", ".join(item["removed_ids"]),
         }
@@ -111,8 +114,10 @@ def _audit_frames(audit: dict[str, Any]) -> tuple[pd.DataFrame, pd.DataFrame]:
         cleaning_rows.append(
             {
                 "rule": "未配置清洗规则",
+                "type": "rule",
                 "before": audit["input_rows"],
                 "removed": 0,
+                "changed": 0,
                 "after": audit["output_rows"],
                 "removed_ids": "",
             }
@@ -137,6 +142,7 @@ def _wide_table(table: pd.DataFrame, weighted: bool) -> pd.DataFrame:
     count_field = "weighted_count" if weighted else "count"
     base_field = "weighted_base" if weighted else "base"
     percent_field = "weighted_percent" if weighted else "percent"
+    suffix = "_weighted" if weighted else ""
     groups = table["group"].drop_duplicates().tolist()
     keys = ["question_id", "question", "subitem", "option"]
     records = []
@@ -147,9 +153,9 @@ def _wide_table(table: pd.DataFrame, weighted: bool) -> pd.DataFrame:
             if group not in by_group.index:
                 continue
             row = by_group.loc[group]
-            record[f"{group}_count"] = row[count_field]
-            record[f"{group}_base"] = row[base_field]
-            record[f"{group}_percent"] = row[percent_field]
+            record[f"{group}{suffix}_count"] = row[count_field]
+            record[f"{group}{suffix}_base"] = row[base_field]
+            record[f"{group}{suffix}_percent"] = row[percent_field]
         records.append(record)
     return pd.DataFrame(records)
 
@@ -166,28 +172,48 @@ def _open_responses(result: ProcessingResult) -> pd.DataFrame:
         return pd.DataFrame(columns=columns)
     rows = []
     for question in result.questions:
-        if question["type"] != "open":
-            continue
-        for column in question["columns"]:
-            source = "text" if column.get("text") else "numeric"
-            name = column.get(source)
-            series = result.dataset.frame(source)[name]
-            for respondent_id, value in series.dropna().items():
-                if not str(value).strip():
-                    continue
-                rows.append(
-                    {
-                        "question_id": str(question["id"]),
-                        "question": question.get("text", question["id"]),
-                        "subitem": column.get("label", ""),
-                        "respondent_id": (
-                            str(respondent_id)
-                            if result.privacy.get("include_respondent_ids", False)
-                            else ""
-                        ),
-                        "response": str(value).strip(),
-                    }
-                )
+        if question["type"] == "open":
+            for column in question["columns"]:
+                source = "text" if column.get("text") else "numeric"
+                name = column.get(source)
+                series = result.dataset.frame(source)[name]
+                for respondent_id, value in series.dropna().items():
+                    if not str(value).strip():
+                        continue
+                    rows.append(
+                        {
+                            "question_id": str(question["id"]),
+                            "question": question.get("text", question["id"]),
+                            "subitem": column.get("label", ""),
+                            "respondent_id": (
+                                str(respondent_id)
+                                if result.privacy.get("include_respondent_ids", False)
+                                else ""
+                            ),
+                            "response": str(value).strip(),
+                        }
+                    )
+        elif question["type"] == "multi":
+            delimiter = question_delimiter(question)
+            if not delimiter:
+                continue
+            for column in question["columns"]:
+                source = "text" if column.get("text") else "numeric"
+                series = result.dataset.frame(source)[column[source]]
+                for record in open_verbatims(series, delimiter).to_dict("records"):
+                    rows.append(
+                        {
+                            "question_id": str(question["id"]),
+                            "question": question.get("text", question["id"]),
+                            "subitem": record["option"],
+                            "respondent_id": (
+                                str(record["respondent_id"])
+                                if result.privacy.get("include_respondent_ids", False)
+                                else ""
+                            ),
+                            "response": record["response"],
+                        }
+                    )
     return pd.DataFrame(rows, columns=columns)
 
 

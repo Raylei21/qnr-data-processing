@@ -8,6 +8,14 @@ from typing import Any
 import pandas as pd
 
 from .dataset import SurveyDataset
+from .multiselect import (
+    answered as multi_answered,
+    membership as multi_membership,
+    normalize_options,
+    question_delimiter,
+    resolve_skip_values,
+    tokenize,
+)
 from .rules import RuleEvaluator
 
 
@@ -39,6 +47,71 @@ def run_quality_checks(
             finding = _exclusive_finding(dataset, question, include_ids)
             if finding:
                 findings.append(finding)
+    return findings
+
+
+def piping_checks(
+    dataset: SurveyDataset,
+    questions: list[dict[str, Any]],
+    piping: list[dict[str, Any]],
+    include_ids: bool,
+) -> list[dict[str, Any]]:
+    """Flag skip-logic violations between a gate question and a target question.
+
+    Two directions are checked per rule:
+
+    - 应跳过却作答: a respondent outside the gate still answered the target.
+    - 应作答却跳过: a respondent inside the gate left the target empty/skipped.
+    """
+    evaluator = RuleEvaluator(dataset, questions)
+    question_map = {str(question["id"]): question for question in questions}
+    findings: list[dict[str, Any]] = []
+
+    for check in piping:
+        name = check.get("name", "跳题逻辑检查")
+        gate = check["gate"]
+        target_id = str(check["target"])
+        question = question_map.get(target_id)
+        if question is None:
+            findings.append(
+                _finding(
+                    f"{name}: 找不到目标题目",
+                    "error",
+                    0,
+                    dataset.respondent_ids[:0],
+                    include_ids,
+                    f"piping target 不存在: {target_id}",
+                )
+            )
+            continue
+        skip_values = check.get("skip_values", ["(跳过)"])
+        should_see = evaluator.evaluate(gate)
+        answered = _question_answered(dataset, question, skip_values)
+
+        leak = answered & ~should_see
+        if leak.any():
+            findings.append(
+                _finding(
+                    f"{name}: 应跳过却作答",
+                    "error",
+                    int(leak.sum()),
+                    dataset.respondent_ids[leak],
+                    include_ids,
+                    f"{target_id} 在 gate 之外仍有作答",
+                )
+            )
+        gap = should_see & ~answered
+        if gap.any():
+            findings.append(
+                _finding(
+                    f"{name}: 应作答却跳过",
+                    "error",
+                    int(gap.sum()),
+                    dataset.respondent_ids[gap],
+                    include_ids,
+                    f"{target_id} 在 gate 之内缺失或跳过",
+                )
+            )
     return findings
 
 
@@ -198,6 +271,8 @@ def _invalid_value_findings(
 def _exclusive_finding(
     dataset: SurveyDataset, question: dict[str, Any], include_ids: bool
 ) -> dict[str, Any] | None:
+    if question_delimiter(question):
+        return _delimiter_exclusive_finding(dataset, question, include_ids)
     columns = question["columns"]
     exclusive_positions = [
         index for index, column in enumerate(columns) if column.get("exclusive")
@@ -226,6 +301,71 @@ def _exclusive_finding(
         include_ids,
         str(question["id"]),
     )
+
+
+def _delimiter_exclusive_finding(
+    dataset: SurveyDataset, question: dict[str, Any], include_ids: bool
+) -> dict[str, Any] | None:
+    options = question.get("options")
+    for column in question.get("columns", []):
+        if column.get("options"):
+            options = column["options"]
+            break
+    if not options:
+        return None
+    normalized = normalize_options(options)
+    exclusive_values = [
+        str(item["value"]) for item in normalized if item.get("exclusive")
+    ]
+    if not exclusive_values:
+        return None
+
+    delimiter = question_delimiter(question)
+    masks = []
+    for column in question["columns"]:
+        source = "text" if column.get("text") else "numeric"
+        tokens = tokenize(dataset.frame(source)[column[source]], delimiter)
+        for item in normalized:
+            masks.append(multi_membership(tokens, str(item["value"])))
+    if not masks:
+        return None
+    selected_count = pd.concat(masks, axis=1).sum(axis=1)
+    exclusive_selected = pd.Series(False, index=selected_count.index)
+    for column in question["columns"]:
+        source = "text" if column.get("text") else "numeric"
+        tokens = tokenize(dataset.frame(source)[column[source]], delimiter)
+        for value in exclusive_values:
+            exclusive_selected = exclusive_selected | multi_membership(tokens, value)
+    violation = exclusive_selected & selected_count.gt(1)
+    if not violation.any():
+        return None
+    return _finding(
+        "互斥选项与其他选项同时选择",
+        "error",
+        int(violation.sum()),
+        dataset.respondent_ids[violation],
+        include_ids,
+        str(question["id"]),
+    )
+
+
+def _question_answered(
+    dataset: SurveyDataset, question: dict[str, Any], skip_values: list[str]
+) -> pd.Series:
+    skip = {str(value).strip() for value in skip_values}
+    masks: list[pd.Series] = []
+    for column in question["columns"]:
+        source = "text" if column.get("text") else "numeric"
+        name = column.get(source)
+        if not name:
+            continue
+        series = dataset.frame(source)[name]
+        nonempty = ~(series.isna() | series.astype("string").str.strip().eq(""))
+        not_skip = ~series.astype("string").str.strip().isin(skip)
+        masks.append(nonempty & not_skip)
+    if not masks:
+        return pd.Series(False, index=dataset.text.index)
+    return pd.concat(masks, axis=1).any(axis=1)
 
 
 def _membership(series: pd.Series, values: list[Any]) -> pd.Series:

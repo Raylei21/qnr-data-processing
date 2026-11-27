@@ -13,8 +13,12 @@
 - 按受访者 ID 对齐数字版和文字版数据
 - 执行 AND、OR、NOT 及任意嵌套的清洗和分组规则
 - 处理单选、多选、矩阵单选、数值题和开放题
+- 按分隔符（如 `┋`）自动拆分单列多选，识别「(跳过)」和「others〖原话〗」
+- 支持去重（按 key 保留最大/最小值）和归一化（去空格/去尾部符号/替换）清洗
 - 输出频数、比例、Base、分组交叉表、NET、T2B/B2B
 - 支持每道题独立的统计 Base 和跳题资格条件
+- 声明式互斥分群（segments），自动生成派生列和分组列
+- 内置跳题一致性检查（应跳过却作答 / 应作答却跳过）
 - 使用已有权重列出表
 - 根据单指标或组合人群目标自动生成 RIM/Raking 权重
 - 检查非法选项、互斥冲突、分组重叠和表格一致性
@@ -261,6 +265,119 @@ python -m qnr_data_processing run --config task.json
 
 支持的逻辑和比较操作请查看 [规则语法说明](references/rules.md)。
 
+### 去重与归一化清洗
+
+除按规则删除外，清洗步骤还支持两种声明式操作：
+
+```json
+{
+  "cleaning": [
+    {
+      "name": "同一客户保留作答时长最长的一条",
+      "type": "dedup",
+      "key": "customer_id",
+      "keep": "max",
+      "on": "duration_seconds",
+      "source": "numeric"
+    },
+    {
+      "name": "去掉 Q9 末尾句号",
+      "type": "normalize",
+      "column": "Q9",
+      "source": "text",
+      "op": "rstrip",
+      "value": "."
+    }
+  ]
+}
+```
+
+- `dedup`：按 `key` 分组，保留 `on` 列取 `max` 或 `min` 的那一条，删除其余重复样本。`on` 必须是数字列。
+- `normalize`：原地改写一列（不删除样本），`op` 支持 `strip`、`lstrip`、`rstrip`、
+  `lower`、`replace`（`replace` 需要 `value` 作为被替换文本、`replacement` 作为替换文本）。
+  默认作用于 `source: "text"`。
+
+## 单列分隔符多选
+
+当多选答案被导出为单列、用分隔符（如 `┋`）连接时，无需手工拆分，直接在题目列上声明
+`delimiter` 即可：
+
+```json
+{
+  "id": "Q2",
+  "type": "multi",
+  "text": "吸引你下载的原因",
+  "base": "any_selected",
+  "columns": [
+    {
+      "text": "q02",
+      "delimiter": "┋",
+      "options": ["价格实惠", "款式多样", "others, please specify"]
+    }
+  ]
+}
+```
+
+引擎会自动：
+
+- 按 `delimiter` 拆分每个单元格，逐选项判断是否选中；
+- 把 `(跳过)` 视为跳题，既不计入任何选项，也不计入 `any_selected` Base；
+- 把 `others, please specify〖原话〗` 识别为「others」选项已选，同时在授权
+  `include_open_responses` 时把 `〖原话〗` 逐条导出到 `open_responses`；
+- 选项中的 `exclusive` 项与其他选项同时选择时，会进入质量检查。
+
+`options` 可为字符串或 `{"value", "label", "exclusive"}` 对象；省略时按数据中出现的
+选项文本自动生成。
+
+## 互斥分群（segments）
+
+当需要把样本按互斥规则切成 L1/L2/L3 这类分层时，用声明式 `segments`，而不是手工写派生列：
+
+```json
+{
+  "segments": [
+    {
+      "name": "购买力分层",
+      "column": "purchase_power",
+      "mutually_exclusive": true,
+      "residual": "L3",
+      "branches": [
+        {"value": "L1", "label": "高购买力", "rule": {"all": [{"column": "income", "op": "gte", "value": 6}, {"column": "comfort", "op": "lte", "value": 2}]}},
+        {"value": "L2", "label": "中等购买力", "rule": {"column": "income", "op": "between", "value": [2, 5]}}
+      ]
+    }
+  ]
+}
+```
+
+- 分支按顺序求值，首个命中分支归属该样本。
+- `mutually_exclusive: true`（默认）会校验分支规则互不重叠，重叠即报错。
+- `residual`：未命中任何分支的样本归属值；写 `"Exclude"`（默认）则排除在分群之外。
+- 每个分支自动生成一个同名分组列（`L1`/`L2`/`L3`），并写入一个可被规则引用的派生列
+  `column`（默认等于 `name`）。
+
+## 跳题一致性检查（piping）
+
+声明跳题逻辑后，引擎自动标记两类违反：
+
+```json
+{
+  "piping": [
+    {
+      "name": "Q6 仅对 Q5 选失望者显示",
+      "gate": {"question": "Q5", "option": "失望", "op": "selected"},
+      "target": "Q6",
+      "skip_values": ["(跳过)"]
+    }
+  ]
+}
+```
+
+- 应跳过却作答：`gate` 之外却仍在 `target` 作答的样本。
+- 应作答却跳过：`gate` 之内但 `target` 为空或为 `skip_values` 的样本。
+
+检查结果进入 `quality_checks`，只标记、不自动删除。
+
 ## 自动加权
 
 ### 单指标和组合指标
@@ -354,8 +471,8 @@ python -m qnr_data_processing run --config task.json
 | Sheet | 内容 |
 |---|---|
 | `tables_long` | 标准长表，包含未加权和加权结果 |
-| `tables_wide` | 各分组横向对比表 |
-| `tables_weighted` | 配置非单位权重时生成的加权横表 |
+| `tables_wide` | 各分组横向对比表（列名为 `{分组}_count/_base/_percent`） |
+| `tables_weighted` | 配置非单位权重时生成的加权横表（列名为 `{分组}_weighted_count/_base/_percent`） |
 | `open_responses` | 明确授权后输出的开放题逐条原话 |
 | `cleaning_audit` | 每条清洗规则的删除人数 |
 | `group_bases` | 各分组未加权及加权 Base |
@@ -379,8 +496,12 @@ python -m qnr_data_processing run --config task.json
 - 不输出开放题逐条原话
 - 不覆盖原始数据
 - 将结果写入新路径
-- 对小于 `min_cell_size` 的单元格同时隐藏未加权和加权结果
+- 对小于 `min_cell_size` 的单元格同时隐藏未加权和加权结果（默认 `0`，即不隐藏）
 - 防止以 `=`、`+`、`-`、`@` 开头的文本被 Excel 当成公式执行
+
+`min_cell_size` 默认是 `0`，表示**不做小样本隐藏**。它只作用于 `tables_long`、
+`tables_wide`、`tables_weighted` 这些出表单元格；`cleaning_audit`、`group_bases` 和
+审计 JSON 始终保留完整计数，便于复核。需要隐藏时显式设置，例如 `{"min_cell_size": 5}`。
 
 仅在确认有权限且确实需要时启用：
 
@@ -448,6 +569,16 @@ python -m qnr_data_processing report \
   --title "数据分析表"
 ```
 
+加 `--weighted` 则读取 `tables_weighted`，生成加权版美化报表：
+
+```bash
+python -m qnr_data_processing report \
+  --tables output/questionnaire_tables.xlsx \
+  --config task.json \
+  --weighted \
+  --output output/数据分析表_加权_美化版.xlsx
+```
+
 排版规则：
 
 - 每道题一块：题干做通栏标题（多选题标「（多选）」、开放题标「（开放题）」）
@@ -462,7 +593,7 @@ python -m qnr_data_processing report \
 根目录的 [SKILL.md](SKILL.md) 定义 Agent 的操作流程。源码安装后可以直接使用 Python
 命令，也可以将仓库打包为 Agent Skill。
 
-当前开发版本：`2.2.0`
+当前开发版本：`2.3.0`
 
 ## 验证
 
@@ -470,12 +601,13 @@ python -m qnr_data_processing report \
 python -m pytest
 ```
 
-当前包含 25 项自动测试，并已使用真实问卷样例完成回归，包括：
+当前包含 38 项自动测试，并已使用真实问卷样例完成回归，包括：
 
 - 单选、多选、矩阵题和 NET
 - 自定义 Base 和缺失值逻辑
 - 单指标与组合人群加权
 - 权重收敛、冲突检测和截尾
+- 去重与归一化清洗、分隔符多选、互斥分群、跳题一致性检查
 - 数据质量及表格一致性
 - 小样本保护和开放题隐私
 

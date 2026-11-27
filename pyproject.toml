@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "qnr-data-processing"
-version = "2.2.0"
+version = "2.3.0"
 description = "Configuration-driven questionnaire cleaning and tabulation engine"
 requires-python = ">=3.10"
 dependencies = [
